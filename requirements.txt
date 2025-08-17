@@ -1,0 +1,27 @@
+# Web Framework & Server
+fastapi
+uvicorn[standard]
+
+# Database (MongoDB)
+pymongo
+motor
+
+# Configuration and Security
+python-dotenv
+passlib[bcrypt]
+python-jose[cryptography]
+
+# AI and RAG Pipeline
+langchain
+langchain-community
+langchain-groq
+faiss-cpu
+sentence-transformers
+pdfplumber
+python-docx
+groq
+
+# Pydantic for data validation (already a dependency of FastAPI, but good to list)
+pydantic
+pydantic-settings
+email-validator
