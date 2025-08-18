@@ -8,8 +8,14 @@ from app.db.session import bots_collection, users_collection
 from app.core.rag_pipeline import DATA_DIR, create_and_persist_index, get_rag_chain
 from typing import List
 from bson import ObjectId  # <--- IMPORT ObjectId
+import re
 
 router = APIRouter()
+
+# utility function: Remove <think> tags from the text
+def strip_think_tags(text: str) -> str:
+    """Removes the <think>...</think> block from the text."""
+    return re.sub(r"<think>.*?</think>", "", text, flags=re.DOTALL).strip()
 
 @router.post("/create", response_model=Bot, status_code=status.HTTP_201_CREATED)
 async def create_bot(
@@ -69,7 +75,7 @@ async def chat_with_bot(
     if not user_message:
         raise HTTPException(status_code=400, detail="Message cannot be empty")
 
-    # --- CHANGE THIS LINE ---
+    
     bot = await bots_collection.find_one({"_id": ObjectId(bot_id), "user_id": str(current_user.id)})
     if not bot:
         raise HTTPException(status_code=404, detail="Bot not found")
@@ -80,8 +86,11 @@ async def chat_with_bot(
         raise HTTPException(status_code=404, detail="Bot index not found. Please upload a resume for this bot.")
             
     result = await rag_chain.ainvoke({"input": user_message})
+    raw_answer = result.get("answer", "Sorry, I couldn't find an answer.")
     
-    return {"reply": result.get("answer", "Sorry, I couldn't find an answer.")}
+    clean_answer = strip_think_tags(raw_answer)
+    
+    return {"reply": clean_answer} 
 
 @router.get("/", response_model=List[Bot])
 async def get_user_bots(current_user: User = Depends(get_current_user)):

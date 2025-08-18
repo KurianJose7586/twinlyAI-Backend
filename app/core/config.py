@@ -3,6 +3,9 @@
 # app/core/config.py
 
 from pydantic_settings import BaseSettings
+from dotenv import load_dotenv  # <-- IMPORT THE LIBRARY
+
+load_dotenv()  # <-- ADD THIS LINE TO EXPLICITLY LOAD THE .env FILE
 
 class Settings(BaseSettings):
     """

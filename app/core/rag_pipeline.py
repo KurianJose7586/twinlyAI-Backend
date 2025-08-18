@@ -1,5 +1,6 @@
 # app/core/rag_pipeline.py
 
+import re 
 import os
 import json
 from pathlib import Path
@@ -41,6 +42,7 @@ def json_to_text(json_data: dict) -> str:
         else:
             text += f"{key.replace('_', ' ').title()}: {value}\n"
     return text
+
 
 # --- MODIFIED FILE PROCESSING ---
 def extract_text_from_file(file_path: Path) -> str:
@@ -95,16 +97,25 @@ def get_rag_chain(user_id: str):
     # Using the LLM and prompt from your app.py
     llm = ChatGroq(temperature=0, model_name="qwen/qwen3-32b")
     prompt = ChatPromptTemplate.from_template("""
-        You are the user's personal AI assistant. Your name is "Twinly".
-        Answer the following question based only on the provided context.
-        If the information is not in the context, say you don't know.
-        
-        <context>
-        {context}
-        </context>
+You are **Twinly**, the user’s personal AI assistant.
 
-        Question: {input}
-    """)
+Guidelines:
+- Answer ONLY using the information in <context>.
+- Be concise and clear (2–4 sentences max).
+- Use bullet points if listing multiple items.
+- Highlight key skills, roles, or achievements simply.
+- If the context does not contain the answer, reply: 
+  "I don’t know based on the resume."
+
+<context>
+{context}
+</context>
+
+Question: {input}
+
+Answer:
+""")
+
 
     document_chain = create_stuff_documents_chain(llm, prompt)
     return create_retrieval_chain(retriever, document_chain)
