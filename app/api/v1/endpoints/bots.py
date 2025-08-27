@@ -4,17 +4,17 @@ from fastapi import APIRouter, UploadFile, File, Depends, HTTPException, status,
 from app.api.v1.deps import get_current_user
 from app.schemas.user import User
 from app.schemas.bot import Bot, BotCreate
-from app.db.session import bots_collection, users_collection
+from app.db.session import bots_collection
 from app.core.rag_pipeline import DATA_DIR, create_and_persist_index, get_rag_chain
 from typing import List
-from bson import ObjectId  # <--- IMPORT ObjectId
+from bson import ObjectId
 import re
+from langchain_core.messages import HumanMessage, AIMessage
 
 router = APIRouter()
 
-# utility function: Remove <think> tags from the text
 def strip_think_tags(text: str) -> str:
-    """Removes the <think>...</think> block from the text."""
+    # (This function remains unchanged)
     return re.sub(r"<think>.*?</think>", "", text, flags=re.DOTALL).strip()
 
 @router.post("/create", response_model=Bot, status_code=status.HTTP_201_CREATED)
@@ -22,9 +22,7 @@ async def create_bot(
     bot_in: BotCreate,
     current_user: User = Depends(get_current_user)
 ):
-    """
-    Creates a new bot record in the database.
-    """
+    # (This function remains unchanged)
     bot_doc = {
         "name": bot_in.name,
         "user_id": str(current_user.id)
@@ -39,23 +37,15 @@ async def upload_resume(
     file: UploadFile = File(...),
     current_user: User = Depends(get_current_user)
 ):
-    """
-    Handles resume upload for a specific bot.
-    """
-    # --- CHANGE THIS LINE ---
+    # (This function remains unchanged)
     bot = await bots_collection.find_one({"_id": ObjectId(bot_id), "user_id": str(current_user.id)})
     if not bot:
         raise HTTPException(status_code=404, detail="Bot not found")
-
-    # The bot_id is used for the directory name, which should be a string
     bot_dir = DATA_DIR / bot_id 
     bot_dir.mkdir(exist_ok=True)
-    
     file_path = bot_dir / file.filename
-    
     with open(file_path, "wb") as buffer:
         buffer.write(await file.read())
-        
     try:
         create_and_persist_index(file_path, bot_id)
         return {"message": f"Successfully uploaded and indexed for bot {bot['name']}"}
@@ -69,33 +59,36 @@ async def chat_with_bot(
     current_user: User = Depends(get_current_user)
 ):
     """
-    Handles chat queries for a specific bot.
+    Handles chat queries for a specific bot, now with memory.
     """
     user_message = message.get("message")
+    chat_history_raw = message.get("chat_history", [])
     if not user_message:
         raise HTTPException(status_code=400, detail="Message cannot be empty")
 
-    
     bot = await bots_collection.find_one({"_id": ObjectId(bot_id), "user_id": str(current_user.id)})
     if not bot:
         raise HTTPException(status_code=404, detail="Bot not found")
-            
-    rag_chain = get_rag_chain(bot_id)
-    
+
+    rag_chain = get_rag_chain(bot_id, bot_name=bot["name"])
     if rag_chain is None:
-        raise HTTPException(status_code=404, detail="Bot index not found. Please upload a resume for this bot.")
-            
-    result = await rag_chain.ainvoke({"input": user_message})
+        raise HTTPException(status_code=404, detail="Bot index not found. Please upload a resume.")
+
+    # Format the chat history for LangChain
+    chat_history = []
+    for msg in chat_history_raw:
+        if msg.get("type") == "user":
+            chat_history.append(HumanMessage(content=msg.get("content")))
+        elif msg.get("type") == "bot":
+            chat_history.append(AIMessage(content=msg.get("content")))
+
+    result = await rag_chain.ainvoke({"input": user_message, "chat_history": chat_history})
     raw_answer = result.get("answer", "Sorry, I couldn't find an answer.")
-    
     clean_answer = strip_think_tags(raw_answer)
-    
-    return {"reply": clean_answer} 
+    return {"reply": clean_answer}
 
 @router.get("/", response_model=List[Bot])
 async def get_user_bots(current_user: User = Depends(get_current_user)):
-    """
-    Retrieves all bots associated with the current user.
-    """
+    # (This function remains unchanged)
     bots = await bots_collection.find({"user_id": str(current_user.id)}).to_list(100)
     return bots
