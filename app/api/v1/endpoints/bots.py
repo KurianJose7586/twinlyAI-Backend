@@ -14,15 +14,23 @@ from langchain_core.messages import HumanMessage, AIMessage
 router = APIRouter()
 
 def strip_think_tags(text: str) -> str:
-    # (This function remains unchanged)
     return re.sub(r"<think>.*?</think>", "", text, flags=re.DOTALL).strip()
+
+@router.get("/public/{bot_id}")
+async def get_public_bot_info(bot_id: str):
+    try:
+        bot = await bots_collection.find_one({"_id": ObjectId(bot_id)})
+        if not bot:
+            raise HTTPException(status_code=404, detail="Bot not found")
+        return {"id": str(bot["_id"]), "name": bot["name"]}
+    except Exception:
+        raise HTTPException(status_code=404, detail="Bot not found or invalid ID")
 
 @router.post("/create", response_model=Bot, status_code=status.HTTP_201_CREATED)
 async def create_bot(
     bot_in: BotCreate,
     current_user: User = Depends(get_current_user)
 ):
-    # (This function remains unchanged)
     bot_doc = {
         "name": bot_in.name,
         "user_id": str(current_user.id)
@@ -37,7 +45,6 @@ async def upload_resume(
     file: UploadFile = File(...),
     current_user: User = Depends(get_current_user)
 ):
-    # (This function remains unchanged)
     bot = await bots_collection.find_one({"_id": ObjectId(bot_id), "user_id": str(current_user.id)})
     if not bot:
         raise HTTPException(status_code=404, detail="Bot not found")
@@ -52,21 +59,21 @@ async def upload_resume(
     except ValueError as e:
         raise HTTPException(status_code=400, detail=str(e))
 
+# --- THIS IS THE FIX ---
 @router.post("/{bot_id}/chat")
 async def chat_with_bot(
     bot_id: str,
     message: dict = Body(...),
-    current_user: User = Depends(get_current_user)
+    # The 'current_user' dependency is now fully removed from the function signature
+    # to make this endpoint public for the embed feature.
 ):
-    """
-    Handles chat queries for a specific bot, now with memory.
-    """
     user_message = message.get("message")
     chat_history_raw = message.get("chat_history", [])
     if not user_message:
         raise HTTPException(status_code=400, detail="Message cannot be empty")
 
-    bot = await bots_collection.find_one({"_id": ObjectId(bot_id), "user_id": str(current_user.id)})
+    # The database query also no longer checks for a user_id, as it's a public call.
+    bot = await bots_collection.find_one({"_id": ObjectId(bot_id)})
     if not bot:
         raise HTTPException(status_code=404, detail="Bot not found")
 
@@ -74,7 +81,6 @@ async def chat_with_bot(
     if rag_chain is None:
         raise HTTPException(status_code=404, detail="Bot index not found. Please upload a resume.")
 
-    # Format the chat history for LangChain
     chat_history = []
     for msg in chat_history_raw:
         if msg.get("type") == "user":
@@ -86,9 +92,9 @@ async def chat_with_bot(
     raw_answer = result.get("answer", "Sorry, I couldn't find an answer.")
     clean_answer = strip_think_tags(raw_answer)
     return {"reply": clean_answer}
+# --- END OF FIX ---
 
 @router.get("/", response_model=List[Bot])
 async def get_user_bots(current_user: User = Depends(get_current_user)):
-    # (This function remains unchanged)
     bots = await bots_collection.find({"user_id": str(current_user.id)}).to_list(100)
-    return bots
+    return bots 

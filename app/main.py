@@ -1,28 +1,37 @@
 # app/main.py
 
-from fastapi import FastAPI
+from fastapi import FastAPI, APIRouter
 from fastapi.middleware.cors import CORSMiddleware
-from .api.v1.endpoints import auth, bots 
+from app.api.v1.endpoints import auth, bots, api_keys # <-- Import the new router
 
-# This is the crucial line. The variable MUST be named 'app'.
-app = FastAPI(title="TwinlyAI Backend")
+app = FastAPI(
+    title="TwinlyAI API",
+    description="API for the TwinlyAI SaaS application.",
+    version="0.1.0"
+)
 
-# --- CORS Middleware ---
+# CORS Middleware
+origins = [
+    "http://localhost:3000",
+    "http://localhost:3001",
+]
+
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["*"], 
+    allow_origins=origins,
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],
 )
 
+# API Router Setup
+api_router = APIRouter()
+api_router.include_router(auth.router, prefix="/auth", tags=["auth"])
+api_router.include_router(bots.router, prefix="/bots", tags=["bots"])
+api_router.include_router(api_keys.router, prefix="/api-keys", tags=["api-keys"]) # <-- Include the new router
+
+app.include_router(api_router, prefix="/api/v1")
+
 @app.get("/")
 def read_root():
-    """
-    Root endpoint to confirm the server is running.
-    """
-    return {"message": "Welcome to the TwinlyAI API!"}
-
-# --- API Routers ---
-app.include_router(auth.router, prefix="/api/v1/auth", tags=["Auth"])
-app.include_router(bots.router, prefix="/api/v1/bots", tags=["Bots"])
+    return {"message": "Welcome to TwinlyAI API"}
