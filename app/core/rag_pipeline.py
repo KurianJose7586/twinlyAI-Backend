@@ -88,7 +88,7 @@ def get_rag_chain(user_id: str, bot_name: str):
     )
     retriever = vector_store.as_retriever()
     
-    llm = ChatGroq(temperature=0.2, model_name="llama3-70b-8192")
+    llm = ChatGroq(temperature=0.2, model_name="qwen/qwen3-32b")
 
     # --- NEW PROMPT WITH MEMORY ---
     # This prompt now includes a placeholder for chat history

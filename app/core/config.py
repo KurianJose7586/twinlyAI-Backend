@@ -16,6 +16,8 @@ class Settings(BaseSettings):
     GROQ_API_KEY: str 
     # Default algorithm for JWT
     ALGORITHM: str = "HS256"
+    MONGO_CONNECTION_STRING: str
+    MONGO_DB_NAME: str = "twinlyai_db" # <-- Here it is
     # Token validity period in minutes
     ACCESS_TOKEN_EXPIRE_MINUTES: int = 60 * 24 * 7  # 7 days
 

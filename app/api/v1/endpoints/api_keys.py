@@ -8,42 +8,37 @@ from app.db.session import api_keys_collection
 from bson import ObjectId
 from typing import List
 import hashlib
+# Import the new Pydantic models
+from app.schemas.api_key import APIKey, APIKeyCreateResponse
 
 router = APIRouter()
 
-# --- Helper to hash API keys for storage ---
 def hash_api_key(api_key: str) -> str:
     return hashlib.sha256(api_key.encode()).hexdigest()
 
-class APIKeyResponse(dict):
-    pass
-
-@router.post("/", status_code=status.HTTP_201_CREATED, response_model=APIKeyResponse)
+# Use the new Pydantic model as the response_model
+@router.post("/", status_code=status.HTTP_201_CREATED, response_model=APIKeyCreateResponse)
 async def create_api_key(
     current_user: User = Depends(get_current_user)
 ):
     """
     Generate a new API key for the current user.
-    The key is stored hashed in the database.
-    The unhashed key is returned to the user only once.
     """
-    # Create a new secure, URL-safe key
     new_key = f"ta_{secrets.token_urlsafe(32)}"
     hashed_key = hash_api_key(new_key)
     
     api_key_doc = {
         "hashed_key": hashed_key,
         "user_id": str(current_user.id),
-        "prefix": new_key[:5] # Store the first few chars for identification
+        "prefix": new_key[:5] 
     }
     
     await api_keys_collection.insert_one(api_key_doc)
     
-    # Return the full, unhashed key to the user
     return {"api_key": new_key, "message": "Key created successfully. Please save it securely as you will not see it again."}
 
-
-@router.get("/", response_model=List[dict])
+# Also update the GET endpoint to use the new model
+@router.get("/", response_model=List[APIKey])
 async def get_user_api_keys(
     current_user: User = Depends(get_current_user)
 ):
@@ -52,7 +47,7 @@ async def get_user_api_keys(
     """
     keys_cursor = api_keys_collection.find({"user_id": str(current_user.id)})
     keys = await keys_cursor.to_list(100)
-    # Return only non-sensitive info
+    
     return [{"id": str(key["_id"]), "prefix": key["prefix"]} for key in keys]
 
 
