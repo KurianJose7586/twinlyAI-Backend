@@ -7,16 +7,14 @@ from app.schemas.user import User
 from app.db.session import api_keys_collection
 from bson import ObjectId
 from typing import List
-import hashlib
-# Import the new Pydantic models
+# --- REMOVE hashlib, IMPORT the hash function from its new location ---
+from app.core.security import hash_api_key
 from app.schemas.api_key import APIKey, APIKeyCreateResponse
 
 router = APIRouter()
 
-def hash_api_key(api_key: str) -> str:
-    return hashlib.sha256(api_key.encode()).hexdigest()
+# --- The hash_api_key function is now removed from this file ---
 
-# Use the new Pydantic model as the response_model
 @router.post("/", status_code=status.HTTP_201_CREATED, response_model=APIKeyCreateResponse)
 async def create_api_key(
     current_user: User = Depends(get_current_user)
@@ -37,7 +35,6 @@ async def create_api_key(
     
     return {"api_key": new_key, "message": "Key created successfully. Please save it securely as you will not see it again."}
 
-# Also update the GET endpoint to use the new model
 @router.get("/", response_model=List[APIKey])
 async def get_user_api_keys(
     current_user: User = Depends(get_current_user)

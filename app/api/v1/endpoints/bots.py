@@ -1,7 +1,8 @@
 # app/api/v1/endpoints/bots.py
 
 from fastapi import APIRouter, UploadFile, File, Depends, HTTPException, status, Body
-from app.api.v1.deps import get_current_user
+# --- Import the new dependency ---
+from app.api.v1.deps import get_current_user, validate_api_key
 from app.schemas.user import User
 from app.schemas.bot import Bot, BotCreate
 from app.db.session import bots_collection
@@ -31,10 +32,7 @@ async def create_bot(
     bot_in: BotCreate,
     current_user: User = Depends(get_current_user)
 ):
-    bot_doc = {
-        "name": bot_in.name,
-        "user_id": str(current_user.id)
-    }
+    bot_doc = { "name": bot_in.name, "user_id": str(current_user.id) }
     result = await bots_collection.insert_one(bot_doc)
     created_bot = await bots_collection.find_one({"_id": result.inserted_id})
     return created_bot
@@ -64,18 +62,22 @@ async def upload_resume(
 async def chat_with_bot(
     bot_id: str,
     message: dict = Body(...),
-    # The 'current_user' dependency is now fully removed from the function signature
-    # to make this endpoint public for the embed feature.
+    # Re-secure the endpoint by adding the API key validation dependency
+    api_key: dict = Depends(validate_api_key) 
 ):
+# --- END OF FIX ---
     user_message = message.get("message")
     chat_history_raw = message.get("chat_history", [])
     if not user_message:
         raise HTTPException(status_code=400, detail="Message cannot be empty")
 
-    # The database query also no longer checks for a user_id, as it's a public call.
     bot = await bots_collection.find_one({"_id": ObjectId(bot_id)})
     if not bot:
         raise HTTPException(status_code=404, detail="Bot not found")
+
+    # Security check: Ensure the API key used belongs to the bot's owner
+    if bot.get("user_id") != str(api_key.get("user_id")):
+        raise HTTPException(status_code=403, detail="API key does not have permission for this bot")
 
     rag_chain = get_rag_chain(bot_id, bot_name=bot["name"])
     if rag_chain is None:
@@ -92,9 +94,8 @@ async def chat_with_bot(
     raw_answer = result.get("answer", "Sorry, I couldn't find an answer.")
     clean_answer = strip_think_tags(raw_answer)
     return {"reply": clean_answer}
-# --- END OF FIX ---
 
 @router.get("/", response_model=List[Bot])
 async def get_user_bots(current_user: User = Depends(get_current_user)):
     bots = await bots_collection.find({"user_id": str(current_user.id)}).to_list(100)
-    return bots 
+    return bots
