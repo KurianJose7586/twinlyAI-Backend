@@ -1,8 +1,7 @@
 # app/api/v1/endpoints/bots.py
 
 from fastapi import APIRouter, UploadFile, File, Depends, HTTPException, status, Body
-# --- Import the new dependency ---
-from app.api.v1.deps import get_current_user, validate_api_key
+from app.api.v1.deps import get_current_user, get_authenticated_user # <-- Update import
 from app.schemas.user import User
 from app.schemas.bot import Bot, BotCreate
 from app.db.session import bots_collection
@@ -11,12 +10,14 @@ from typing import List
 from bson import ObjectId
 import re
 from langchain_core.messages import HumanMessage, AIMessage
+import shutil
 
 router = APIRouter()
 
 def strip_think_tags(text: str) -> str:
     return re.sub(r"<think>.*?</think>", "", text, flags=re.DOTALL).strip()
 
+# ... (get_public_bot_info, create_bot, upload_resume remain the same) ...
 @router.get("/public/{bot_id}")
 async def get_public_bot_info(bot_id: str):
     try:
@@ -57,15 +58,15 @@ async def upload_resume(
     except ValueError as e:
         raise HTTPException(status_code=400, detail=str(e))
 
+
 # --- THIS IS THE FIX ---
 @router.post("/{bot_id}/chat")
 async def chat_with_bot(
     bot_id: str,
     message: dict = Body(...),
-    # Re-secure the endpoint by adding the API key validation dependency
-    api_key: dict = Depends(validate_api_key) 
+    # Use the new flexible dependency that accepts either JWT token or API Key
+    authenticated_user: dict = Depends(get_authenticated_user)
 ):
-# --- END OF FIX ---
     user_message = message.get("message")
     chat_history_raw = message.get("chat_history", [])
     if not user_message:
@@ -75,9 +76,9 @@ async def chat_with_bot(
     if not bot:
         raise HTTPException(status_code=404, detail="Bot not found")
 
-    # Security check: Ensure the API key used belongs to the bot's owner
-    if bot.get("user_id") != str(api_key.get("user_id")):
-        raise HTTPException(status_code=403, detail="API key does not have permission for this bot")
+    # Security check: Ensure the authenticated user (from token or key) owns this bot
+    if bot.get("user_id") != str(authenticated_user.get("_id")):
+        raise HTTPException(status_code=403, detail="You do not have permission for this bot")
 
     rag_chain = get_rag_chain(bot_id, bot_name=bot["name"])
     if rag_chain is None:
@@ -94,8 +95,28 @@ async def chat_with_bot(
     raw_answer = result.get("answer", "Sorry, I couldn't find an answer.")
     clean_answer = strip_think_tags(raw_answer)
     return {"reply": clean_answer}
+# --- END OF FIX ---
 
 @router.get("/", response_model=List[Bot])
 async def get_user_bots(current_user: User = Depends(get_current_user)):
     bots = await bots_collection.find({"user_id": str(current_user.id)}).to_list(100)
     return bots
+    
+@router.delete("/{bot_id}", status_code=status.HTTP_204_NO_CONTENT)
+async def delete_bot(
+    bot_id: str,
+    current_user: User = Depends(get_current_user)
+):
+    bot = await bots_collection.find_one(
+        {"_id": ObjectId(bot_id), "user_id": str(current_user.id)}
+    )
+    if not bot:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Bot not found")
+
+    await bots_collection.delete_one({"_id": ObjectId(bot_id)})
+
+    bot_dir = DATA_DIR / bot_id
+    if bot_dir.exists() and bot_dir.is_dir():
+        shutil.rmtree(bot_dir)
+
+    return
