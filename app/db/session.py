@@ -2,13 +2,17 @@
 
 from motor.motor_asyncio import AsyncIOMotorClient
 from app.core.config import settings
+import certifi # <-- Import certifi
 
-# Setup the MongoDB client and database
-client = AsyncIOMotorClient(settings.MONGO_CONNECTION_STRING)
 # --- THIS IS THE FIX ---
-# Change MONGO_DB to MONGO_DB_NAME to match the variable in your config file.
-database = client[settings.MONGO_DB_NAME]
+# Add tlsCAFile=certifi.where() to the client connection
+client = AsyncIOMotorClient(
+    settings.MONGO_CONNECTION_STRING,
+    tlsCAFile=certifi.where()
+)
 # --- END OF FIX ---
+
+database = client[settings.MONGO_DB_NAME]
 
 # Define collections
 users_collection = database["users"]
