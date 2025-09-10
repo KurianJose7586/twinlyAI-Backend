@@ -1,9 +1,10 @@
 # app/api/v1/endpoints/bots.py
 
 from fastapi import APIRouter, UploadFile, File, Depends, HTTPException, status, Body
-from app.api.v1.deps import get_current_user, get_authenticated_user # <-- Update import
+from app.api.v1.deps import get_current_user, get_authenticated_user
 from app.schemas.user import User
-from app.schemas.bot import Bot, BotCreate
+# --- Import the new BotUpdate schema ---
+from app.schemas.bot import Bot, BotCreate, BotUpdate
 from app.db.session import bots_collection
 from app.core.rag_pipeline import DATA_DIR, create_and_persist_index, get_rag_chain
 from typing import List
@@ -17,7 +18,8 @@ router = APIRouter()
 def strip_think_tags(text: str) -> str:
     return re.sub(r"<think>.*?</think>", "", text, flags=re.DOTALL).strip()
 
-# ... (get_public_bot_info, create_bot, upload_resume remain the same) ...
+# ... (get_public_bot_info, create_bot, upload_resume, chat_with_bot, get_user_bots, delete_bot endpoints remain the same) ...
+
 @router.get("/public/{bot_id}")
 async def get_public_bot_info(bot_id: str):
     try:
@@ -58,13 +60,10 @@ async def upload_resume(
     except ValueError as e:
         raise HTTPException(status_code=400, detail=str(e))
 
-
-# --- THIS IS THE FIX ---
 @router.post("/{bot_id}/chat")
 async def chat_with_bot(
     bot_id: str,
     message: dict = Body(...),
-    # Use the new flexible dependency that accepts either JWT token or API Key
     authenticated_user: dict = Depends(get_authenticated_user)
 ):
     user_message = message.get("message")
@@ -76,7 +75,6 @@ async def chat_with_bot(
     if not bot:
         raise HTTPException(status_code=404, detail="Bot not found")
 
-    # Security check: Ensure the authenticated user (from token or key) owns this bot
     if bot.get("user_id") != str(authenticated_user.get("_id")):
         raise HTTPException(status_code=403, detail="You do not have permission for this bot")
 
@@ -95,7 +93,6 @@ async def chat_with_bot(
     raw_answer = result.get("answer", "Sorry, I couldn't find an answer.")
     clean_answer = strip_think_tags(raw_answer)
     return {"reply": clean_answer}
-# --- END OF FIX ---
 
 @router.get("/", response_model=List[Bot])
 async def get_user_bots(current_user: User = Depends(get_current_user)):
@@ -120,3 +117,29 @@ async def delete_bot(
         shutil.rmtree(bot_dir)
 
     return
+
+# --- NEW: Bot Update Endpoint ---
+@router.patch("/{bot_id}", response_model=Bot)
+async def update_bot(
+    bot_id: str,
+    bot_in: BotUpdate,
+    current_user: User = Depends(get_current_user)
+):
+    """
+    Updates a bot's details, such as its name.
+    """
+    bot = await bots_collection.find_one(
+        {"_id": ObjectId(bot_id), "user_id": str(current_user.id)}
+    )
+    if not bot:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Bot not found")
+        
+    update_data = bot_in.model_dump(exclude_unset=True)
+    
+    await bots_collection.update_one(
+        {"_id": ObjectId(bot_id)},
+        {"$set": update_data}
+    )
+    
+    updated_bot = await bots_collection.find_one({"_id": ObjectId(bot_id)})
+    return updated_bot

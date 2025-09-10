@@ -2,7 +2,7 @@
 
 from fastapi import FastAPI, APIRouter
 from fastapi.middleware.cors import CORSMiddleware
-from app.api.v1.endpoints import auth, bots, api_keys # <-- Import the new router
+from app.api.v1.endpoints import auth, bots, api_keys, users # <-- Import users router
 
 app = FastAPI(
     title="TwinlyAI API",
@@ -13,7 +13,6 @@ app = FastAPI(
 # CORS Middleware
 origins = [
     "http://localhost:3000",
-    "http://localhost:3001",
 ]
 
 app.add_middleware(
@@ -28,7 +27,8 @@ app.add_middleware(
 api_router = APIRouter()
 api_router.include_router(auth.router, prefix="/auth", tags=["auth"])
 api_router.include_router(bots.router, prefix="/bots", tags=["bots"])
-api_router.include_router(api_keys.router, prefix="/api-keys", tags=["api-keys"]) # <-- Include the new router
+api_router.include_router(api_keys.router, prefix="/api-keys", tags=["api-keys"])
+api_router.include_router(users.router, prefix="/users", tags=["users"]) # <-- Include users router
 
 app.include_router(api_router, prefix="/api/v1")
 
