@@ -13,6 +13,7 @@ app = FastAPI(
 # CORS Middleware
 origins = [
     "http://localhost:3000",
+    "http://localhost:3001",
     "https://twinly-ai-frontend.vercel.app/"
 ]
 

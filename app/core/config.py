@@ -3,9 +3,9 @@
 # app/core/config.py
 
 from pydantic_settings import BaseSettings
-from dotenv import load_dotenv  # <-- IMPORT THE LIBRARY
+from dotenv import load_dotenv 
 
-load_dotenv()  # <-- ADD THIS LINE TO EXPLICITLY LOAD THE .env FILE
+load_dotenv()  
 
 class Settings(BaseSettings):
     """
@@ -17,9 +17,13 @@ class Settings(BaseSettings):
     # Default algorithm for JWT
     ALGORITHM: str = "HS256"
     MONGO_CONNECTION_STRING: str
-    MONGO_DB_NAME: str = "twinlyai_db" # <-- Here it is
+    MONGO_DB_NAME: str = "twinlyai_db" 
     # Token validity period in minutes
     ACCESS_TOKEN_EXPIRE_MINUTES: int = 60 * 24 * 7  # 7 days
+    GOOGLE_CLIENT_ID: str
+    GOOGLE_CLIENT_SECRET: str
+    GITHUB_CLIENT_ID: str
+    GITHUB_CLIENT_SECRET: str
 
     class Config:
         env_file = ".env"
