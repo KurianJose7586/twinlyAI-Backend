@@ -1,145 +1,160 @@
-# app/api/v1/endpoints/bots.py
-
-from fastapi import APIRouter, UploadFile, File, Depends, HTTPException, status, Body
-from app.api.v1.deps import get_current_user, get_authenticated_user
-from app.schemas.user import User
-# --- Import the new BotUpdate schema ---
-from app.schemas.bot import Bot, BotCreate, BotUpdate
-from app.db.session import bots_collection
-from app.core.rag_pipeline import DATA_DIR, create_and_persist_index, get_rag_chain
-from typing import List
-from bson import ObjectId
-import re
-from langchain_core.messages import HumanMessage, AIMessage
+import os
 import shutil
+import re
+from fastapi import APIRouter, Depends, HTTPException, UploadFile, File, Form
+from fastapi.responses import JSONResponse, StreamingResponse
+from bson import ObjectId
+from typing import List
+
+from app.db.session import get_db
+from app.core.rag_pipeline import RAGPipeline, get_file_extension
+from app.api.v1.deps import get_current_user, get_authenticated_user, api_key_auth
+from app.schemas.bot import BotCreate, BotUpdate
+from langchain_core.messages import HumanMessage, AIMessage
 
 router = APIRouter()
+bots_collection = get_db()["bots"]
 
 def strip_think_tags(text: str) -> str:
+    """Removes <think> tags from the LLM response for a cleaner output."""
     return re.sub(r"<think>.*?</think>", "", text, flags=re.DOTALL).strip()
 
-# ... (get_public_bot_info, create_bot, upload_resume, chat_with_bot, get_user_bots, delete_bot endpoints remain the same) ...
+async def clean_stream(generator):
+    """An async generator that cleans chunks from the RAG pipeline stream."""
+    async for chunk in generator:
+        if "answer" in chunk:
+            cleaned_chunk = strip_think_tags(chunk["answer"])
+            if cleaned_chunk: # Only yield if there's content after stripping
+                yield cleaned_chunk
 
 @router.get("/public/{bot_id}")
 async def get_public_bot_info(bot_id: str):
-    try:
-        bot = await bots_collection.find_one({"_id": ObjectId(bot_id)})
-        if not bot:
-            raise HTTPException(status_code=404, detail="Bot not found")
-        return {"id": str(bot["_id"]), "name": bot["name"]}
-    except Exception:
-        raise HTTPException(status_code=404, detail="Bot not found or invalid ID")
+    bot = await bots_collection.find_one({"_id": ObjectId(bot_id)})
+    if not bot:
+        raise HTTPException(status_code=404, detail="Bot not found")
+    return {"name": bot.get("name"), "id": str(bot.get("_id"))}
 
-@router.post("/create", response_model=Bot, status_code=status.HTTP_201_CREATED)
-async def create_bot(
-    bot_in: BotCreate,
-    current_user: User = Depends(get_current_user)
-):
-    bot_doc = { "name": bot_in.name, "user_id": str(current_user.id) }
+@router.post("/create", status_code=201)
+async def create_bot(bot_data: BotCreate, current_user: dict = Depends(get_current_user)):
+    bot_doc = {
+        "name": bot_data.name,
+        "user_id": current_user["_id"]
+    }
     result = await bots_collection.insert_one(bot_doc)
     created_bot = await bots_collection.find_one({"_id": result.inserted_id})
     return created_bot
 
-@router.post("/{bot_id}/upload", status_code=status.HTTP_200_OK)
-async def upload_resume(
-    bot_id: str,
-    file: UploadFile = File(...),
-    current_user: User = Depends(get_current_user)
-):
-    bot = await bots_collection.find_one({"_id": ObjectId(bot_id), "user_id": str(current_user.id)})
-    if not bot:
-        raise HTTPException(status_code=404, detail="Bot not found")
-    bot_dir = DATA_DIR / bot_id 
-    bot_dir.mkdir(exist_ok=True)
-    file_path = bot_dir / file.filename
-    with open(file_path, "wb") as buffer:
-        buffer.write(await file.read())
-    try:
-        create_and_persist_index(file_path, bot_id)
-        return {"message": f"Successfully uploaded and indexed for bot {bot['name']}"}
-    except ValueError as e:
-        raise HTTPException(status_code=400, detail=str(e))
-
-@router.post("/{bot_id}/chat")
-async def chat_with_bot(
-    bot_id: str,
-    message: dict = Body(...),
-    authenticated_user: dict = Depends(get_authenticated_user)
-):
-    user_message = message.get("message")
-    chat_history_raw = message.get("chat_history", [])
-    if not user_message:
-        raise HTTPException(status_code=400, detail="Message cannot be empty")
-
+@router.post("/{bot_id}/upload")
+async def upload_bot_resume(bot_id: str, file: UploadFile = File(...), current_user: dict = Depends(get_current_user)):
     bot = await bots_collection.find_one({"_id": ObjectId(bot_id)})
     if not bot:
         raise HTTPException(status_code=404, detail="Bot not found")
 
-    if bot.get("user_id") != str(authenticated_user.get("_id")):
-        raise HTTPException(status_code=403, detail="You do not have permission for this bot")
+    if str(bot.get("user_id")) != str(current_user.get("_id")):
+        raise HTTPException(status_code=403, detail="Not authorized to upload to this bot")
 
-    rag_chain = get_rag_chain(bot_id, bot_name=bot["name"])
-    if rag_chain is None:
-        raise HTTPException(status_code=404, detail="Bot index not found. Please upload a resume.")
+    user_id = str(current_user["_id"])
+    file_extension = get_file_extension(file.filename)
+    if not file_extension:
+        raise HTTPException(status_code=400, detail="Invalid file type")
 
-    chat_history = []
-    for msg in chat_history_raw:
-        if msg.get("type") == "user":
-            chat_history.append(HumanMessage(content=msg.get("content")))
-        elif msg.get("type") == "bot":
-            chat_history.append(AIMessage(content=msg.get("content")))
-
-    result = await rag_chain.ainvoke({"input": user_message, "chat_history": chat_history})
-    raw_answer = result.get("answer", "Sorry, I couldn't find an answer.")
-    clean_answer = strip_think_tags(raw_answer)
-    return {"reply": clean_answer}
-
-@router.get("/", response_model=List[Bot])
-async def get_user_bots(current_user: User = Depends(get_current_user)):
-    bots = await bots_collection.find({"user_id": str(current_user.id)}).to_list(100)
-    return bots
+    upload_dir = f"data/{user_id}/{bot_id}"
+    if os.path.exists(upload_dir):
+        shutil.rmtree(upload_dir)
+    os.makedirs(upload_dir, exist_ok=True)
     
-@router.delete("/{bot_id}", status_code=status.HTTP_204_NO_CONTENT)
-async def delete_bot(
-    bot_id: str,
-    current_user: User = Depends(get_current_user)
-):
-    bot = await bots_collection.find_one(
-        {"_id": ObjectId(bot_id), "user_id": str(current_user.id)}
-    )
+    file_path = os.path.join(upload_dir, f"resume{file_extension}")
+    with open(file_path, "wb") as buffer:
+        shutil.copyfileobj(file.file, buffer)
+
+    try:
+        pipeline = RAGPipeline(bot_id=bot_id, user_id=user_id, bot_name=bot.get("name"))
+        await pipeline.load_and_index_document(file_path)
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"Failed to process and index the document: {str(e)}")
+
+    return JSONResponse(content={"message": f"File '{file.filename}' uploaded and indexed successfully for bot '{bot.get('name')}'."})
+
+@router.get("/")
+async def get_user_bots(current_user: dict = Depends(get_current_user)):
+    user_id = current_user["_id"]
+    bots_cursor = bots_collection.find({"user_id": user_id})
+    user_bots = await bots_cursor.to_list(length=None)
+    return user_bots
+
+@router.patch("/{bot_id}")
+async def update_bot(bot_id: str, bot_update: BotUpdate, current_user: dict = Depends(get_current_user)):
+    bot = await bots_collection.find_one({"_id": ObjectId(bot_id)})
     if not bot:
-        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Bot not found")
+        raise HTTPException(status_code=404, detail="Bot not found")
 
-    await bots_collection.delete_one({"_id": ObjectId(bot_id)})
+    if str(bot.get("user_id")) != str(current_user.get("_id")):
+        raise HTTPException(status_code=403, detail="Not authorized to update this bot")
 
-    bot_dir = DATA_DIR / bot_id
-    if bot_dir.exists() and bot_dir.is_dir():
-        shutil.rmtree(bot_dir)
+    update_data = bot_update.model_dump(exclude_unset=True)
+    if not update_data:
+        raise HTTPException(status_code=400, detail="No update data provided")
 
-    return
-
-# --- NEW: Bot Update Endpoint ---
-@router.patch("/{bot_id}", response_model=Bot)
-async def update_bot(
-    bot_id: str,
-    bot_in: BotUpdate,
-    current_user: User = Depends(get_current_user)
-):
-    """
-    Updates a bot's details, such as its name.
-    """
-    bot = await bots_collection.find_one(
-        {"_id": ObjectId(bot_id), "user_id": str(current_user.id)}
-    )
-    if not bot:
-        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Bot not found")
-        
-    update_data = bot_in.model_dump(exclude_unset=True)
-    
-    await bots_collection.update_one(
-        {"_id": ObjectId(bot_id)},
-        {"$set": update_data}
-    )
-    
+    await bots_collection.update_one({"_id": ObjectId(bot_id)}, {"$set": update_data})
     updated_bot = await bots_collection.find_one({"_id": ObjectId(bot_id)})
     return updated_bot
+
+@router.delete("/{bot_id}", status_code=204)
+async def delete_bot(bot_id: str, current_user: dict = Depends(get_current_user)):
+    bot = await bots_collection.find_one({"_id": ObjectId(bot_id)})
+    if not bot:
+        raise HTTPException(status_code=404, detail="Bot not found")
+
+    if str(bot.get("user_id")) != str(current_user.get("_id")):
+        raise HTTPException(status_code=403, detail="Not authorized to delete this bot")
+
+    # Delete associated data directory
+    user_id = str(current_user["_id"])
+    bot_data_dir = f"data/{user_id}/{bot_id}"
+    if os.path.exists(bot_data_dir):
+        shutil.rmtree(bot_data_dir)
+
+    # Delete from MongoDB
+    await bots_collection.delete_one({"_id": ObjectId(bot_id)})
+    return
+
+@router.post("/{bot_id}/chat")
+async def chat_with_bot(bot_id: str, request_data: dict, authenticated_user: dict = Depends(get_authenticated_user)):
+    user_message = request_data.get("message")
+    chat_history_raw = request_data.get("chat_history", [])
+    
+    bot = await bots_collection.find_one({"_id": ObjectId(bot_id)})
+    if not bot:
+        raise HTTPException(status_code=404, detail="Bot not found")
+    
+    if str(bot.get("user_id")) != str(authenticated_user.get("_id")):
+        raise HTTPException(status_code=403, detail="You do not have permission for this bot")
+
+    pipeline = RAGPipeline(bot_id=bot_id, user_id=str(bot["user_id"]), bot_name=bot["name"])
+
+    chat_history = [HumanMessage(content=msg["content"]) if msg["type"] == "user" else AIMessage(content=msg["content"]) for msg in chat_history_raw]
+    
+    response = await pipeline.get_response(user_message, chat_history)
+    response['answer'] = strip_think_tags(response['answer'])
+    return response
+
+@router.post("/{bot_id}/chat/stream")
+async def chat_with_bot_stream(bot_id: str, request_data: dict, authenticated_user: dict = Depends(get_authenticated_user)):
+    user_message = request_data.get("message")
+    chat_history_raw = request_data.get("chat_history", [])
+
+    bot = await bots_collection.find_one({"_id": ObjectId(bot_id)})
+    if not bot:
+        raise HTTPException(status_code=404, detail="Bot not found")
+    
+    if str(bot.get("user_id")) != str(authenticated_user.get("_id")):
+        raise HTTPException(status_code=403, detail="You do not have permission for this bot")
+
+    pipeline = RAGPipeline(bot_id=bot_id, user_id=str(bot["user_id"]), bot_name=bot["name"])
+
+    chat_history = [HumanMessage(content=msg["content"]) if msg["type"] == "user" else AIMessage(content=msg["content"]) for msg in chat_history_raw]
+
+    return StreamingResponse(
+        clean_stream(pipeline.get_response_stream(user_message, chat_history)),
+        media_type="text/event-stream"
+    )
