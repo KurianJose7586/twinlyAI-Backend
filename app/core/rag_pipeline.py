@@ -64,7 +64,7 @@ class RAGPipeline:
         self.embeddings = HuggingFaceEmbeddings(model_name="BAAI/bge-small-en-v1.5")
         
         self.llm = ChatGroq(
-            model_name="llama3-8b-8192", 
+            model_name="qwen/qwen3-32b", 
             temperature=0.7, 
             groq_api_key=settings.GROQ_API_KEY
         )
