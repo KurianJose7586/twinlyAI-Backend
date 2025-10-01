@@ -14,7 +14,7 @@ from app.api.v1.deps import get_current_user, get_authenticated_user
 from app.schemas.user import User
 from app.schemas.bot import Bot, BotCreate, BotUpdate
 from app.db.session import bots_collection
-from app.core.rag_pipeline import RAGPipeline, get_file_extension
+from app.core.rag_pipeline import RAGPipeline, get_file_extension # Corrected import
 
 router = APIRouter()
 
@@ -22,12 +22,13 @@ def strip_think_tags(text: str) -> str:
     """Removes <think> tags and surrounding whitespace from the LLM response."""
     return re.sub(r"<think>.*?</think>", "", text, flags=re.DOTALL).strip()
 
+# This is the helper function that will clean the stream
 async def clean_stream(generator):
     """An async generator that cleans chunks from the RAG pipeline stream."""
     async for chunk in generator:
         if "answer" in chunk:
             cleaned_chunk = strip_think_tags(chunk["answer"])
-            if cleaned_chunk:  # Only yield if there's content after stripping
+            if cleaned_chunk:
                 yield cleaned_chunk
 
 @router.post("/{bot_id}/chat/stream")
@@ -47,10 +48,13 @@ async def chat_with_bot_stream(bot_id: str, request_data: dict, authenticated_us
 
     chat_history = [HumanMessage(content=msg["content"]) if msg["type"] == "user" else AIMessage(content=msg["content"]) for msg in chat_history_raw]
 
+    # --- THIS IS THE FIX ---
+    # We must wrap the pipeline's stream with our `clean_stream` function.
     return StreamingResponse(
         clean_stream(pipeline.get_response_stream(user_message, chat_history)),
         media_type="text/event-stream"
     )
+    # --- END OF FIX ---
 
 @router.post("/{bot_id}/chat")
 async def chat_with_bot(bot_id: str, request_data: dict, authenticated_user: dict = Depends(get_authenticated_user)):
@@ -67,12 +71,12 @@ async def chat_with_bot(bot_id: str, request_data: dict, authenticated_user: dic
     pipeline = RAGPipeline(bot_id=bot_id, user_id=str(bot["user_id"]), bot_name=bot["name"])
     chat_history = [HumanMessage(content=msg["content"]) if msg["type"] == "user" else AIMessage(content=msg["content"]) for msg in chat_history_raw]
     
-    # This simulates a non-streaming response for endpoints that might need it
+    # Also ensure the non-streaming endpoint is properly cleaned
     full_response = ""
     async for chunk in pipeline.get_response_stream(user_message, chat_history):
         if "answer" in chunk:
             full_response += chunk["answer"]
-
+            
     return {"reply": strip_think_tags(full_response)}
 
 
@@ -119,12 +123,11 @@ async def upload_bot_resume(bot_id: str, file: UploadFile = File(...), current_u
 
     try:
         pipeline = RAGPipeline(bot_id=bot_id, user_id=user_id, bot_name=bot.get("name"))
-        await pipeline.load_and_index_document(file_path)
+        await pipeline.load_and_index_document(file_path) # Changed from process_file
     except Exception as e:
         raise HTTPException(status_code=500, detail=f"Failed to process and index the document: {str(e)}")
 
     return JSONResponse(content={"message": f"File '{file.filename}' uploaded and indexed successfully for bot '{bot.get('name')}'."})
-
 
 @router.get("/", response_model=List[Bot])
 async def get_user_bots(current_user: User = Depends(get_current_user)):
