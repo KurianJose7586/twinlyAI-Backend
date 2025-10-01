@@ -5,7 +5,7 @@ from typing import List
 from bson import ObjectId
 
 from fastapi import (
-    APRouter, UploadFile, File, Depends, HTTPException, status
+    APIRouter, UploadFile, File, Depends, HTTPException, status
 )
 from starlette.responses import StreamingResponse, JSONResponse
 from langchain_core.messages import HumanMessage, AIMessage
@@ -19,7 +19,7 @@ from app.core.rag_pipeline import RAGPipeline, get_file_extension
 router = APIRouter()
 
 def strip_think_tags(text: str) -> str:
-    """Removes <think> tags from the LLM response for a cleaner output."""
+    """Removes <think> tags and surrounding whitespace from the LLM response."""
     return re.sub(r"<think>.*?</think>", "", text, flags=re.DOTALL).strip()
 
 async def clean_stream(generator):
@@ -30,6 +30,53 @@ async def clean_stream(generator):
             if cleaned_chunk:  # Only yield if there's content after stripping
                 yield cleaned_chunk
 
+@router.post("/{bot_id}/chat/stream")
+async def chat_with_bot_stream(bot_id: str, request_data: dict, authenticated_user: dict = Depends(get_authenticated_user)):
+    user_message = request_data.get("message")
+    chat_history_raw = request_data.get("chat_history", [])
+
+    bot = await bots_collection.find_one({"_id": ObjectId(bot_id)})
+    if not bot:
+        raise HTTPException(status_code=404, detail="Bot not found")
+    
+    user_id_from_auth = str(authenticated_user.get("_id"))
+    if str(bot.get("user_id")) != user_id_from_auth:
+        raise HTTPException(status_code=403, detail="You do not have permission for this bot")
+
+    pipeline = RAGPipeline(bot_id=bot_id, user_id=user_id_from_auth, bot_name=bot["name"])
+
+    chat_history = [HumanMessage(content=msg["content"]) if msg["type"] == "user" else AIMessage(content=msg["content"]) for msg in chat_history_raw]
+
+    return StreamingResponse(
+        clean_stream(pipeline.get_response_stream(user_message, chat_history)),
+        media_type="text/event-stream"
+    )
+
+@router.post("/{bot_id}/chat")
+async def chat_with_bot(bot_id: str, request_data: dict, authenticated_user: dict = Depends(get_authenticated_user)):
+    user_message = request_data.get("message")
+    chat_history_raw = request_data.get("chat_history", [])
+    
+    bot = await bots_collection.find_one({"_id": ObjectId(bot_id)})
+    if not bot:
+        raise HTTPException(status_code=404, detail="Bot not found")
+    
+    if str(bot.get("user_id")) != str(authenticated_user.get("_id")):
+        raise HTTPException(status_code=403, detail="You do not have permission for this bot")
+
+    pipeline = RAGPipeline(bot_id=bot_id, user_id=str(bot["user_id"]), bot_name=bot["name"])
+    chat_history = [HumanMessage(content=msg["content"]) if msg["type"] == "user" else AIMessage(content=msg["content"]) for msg in chat_history_raw]
+    
+    # This simulates a non-streaming response for endpoints that might need it
+    full_response = ""
+    async for chunk in pipeline.get_response_stream(user_message, chat_history):
+        if "answer" in chunk:
+            full_response += chunk["answer"]
+
+    return {"reply": strip_think_tags(full_response)}
+
+
+# (The rest of your endpoints remain the same)
 @router.get("/public/{bot_id}")
 async def get_public_bot_info(bot_id: str):
     try:
@@ -110,45 +157,3 @@ async def delete_bot(bot_id: str, current_user: User = Depends(get_current_user)
     if os.path.exists(user_data_dir):
         shutil.rmtree(user_data_dir)
     return
-
-@router.post("/{bot_id}/chat")
-async def chat_with_bot(bot_id: str, request_data: dict, authenticated_user: dict = Depends(get_authenticated_user)):
-    user_message = request_data.get("message")
-    chat_history_raw = request_data.get("chat_history", [])
-    
-    bot = await bots_collection.find_one({"_id": ObjectId(bot_id)})
-    if not bot:
-        raise HTTPException(status_code=404, detail="Bot not found")
-    
-    if str(bot.get("user_id")) != str(authenticated_user.get("_id")):
-        raise HTTPException(status_code=403, detail="You do not have permission for this bot")
-
-    pipeline = RAGPipeline(bot_id=bot_id, user_id=str(bot["user_id"]), bot_name=bot["name"])
-
-    chat_history = [HumanMessage(content=msg["content"]) if msg["type"] == "user" else AIMessage(content=msg["content"]) for msg in chat_history_raw]
-    
-    response = await pipeline.get_response(user_message, chat_history)
-    response['answer'] = strip_think_tags(response['answer'])
-    return response
-
-@router.post("/{bot_id}/chat/stream")
-async def chat_with_bot_stream(bot_id: str, request_data: dict, authenticated_user: dict = Depends(get_authenticated_user)):
-    user_message = request_data.get("message")
-    chat_history_raw = request_data.get("chat_history", [])
-
-    bot = await bots_collection.find_one({"_id": ObjectId(bot_id)})
-    if not bot:
-        raise HTTPException(status_code=404, detail="Bot not found")
-    
-    user_id_from_auth = str(authenticated_user.get("_id"))
-    if str(bot.get("user_id")) != user_id_from_auth:
-        raise HTTPException(status_code=403, detail="You do not have permission for this bot")
-
-    pipeline = RAGPipeline(bot_id=bot_id, user_id=user_id_from_auth, bot_name=bot["name"])
-
-    chat_history = [HumanMessage(content=msg["content"]) if msg["type"] == "user" else AIMessage(content=msg["content"]) for msg in chat_history_raw]
-
-    return StreamingResponse(
-        clean_stream(pipeline.get_response_stream(user_message, chat_history)),
-        media_type="text/event-stream"
-    )
