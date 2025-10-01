@@ -49,12 +49,11 @@ async def chat_with_bot_stream(bot_id: str, request_data: dict, authenticated_us
     chat_history = [HumanMessage(content=msg["content"]) if msg["type"] == "user" else AIMessage(content=msg["content"]) for msg in chat_history_raw]
 
     # --- THIS IS THE FIX ---
-    # We must wrap the pipeline's stream with our `clean_stream` function.
+    # Wrap the pipeline's stream with the clean_stream function.
     return StreamingResponse(
         clean_stream(pipeline.get_response_stream(user_message, chat_history)),
         media_type="text/event-stream"
     )
-    # --- END OF FIX ---
 
 @router.post("/{bot_id}/chat")
 async def chat_with_bot(bot_id: str, request_data: dict, authenticated_user: dict = Depends(get_authenticated_user)):

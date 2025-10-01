@@ -15,7 +15,9 @@ from langchain_core.documents import Document
 from langchain_core.messages import HumanMessage, AIMessage
 from app.core.config import settings
 
-# --- JSON to TEXT CONVERSION (Helper Function) ---
+def get_file_extension(filename: str) -> str:
+    return os.path.splitext(filename)[1]
+
 def json_to_text(json_data: dict) -> str:
     text = ""
     for key, value in json_data.items():
@@ -35,7 +37,6 @@ def json_to_text(json_data: dict) -> str:
             text += f"{key.replace('_', ' ').title()}: {value}\n"
     return text
 
-# --- FILE PROCESSING (Helper Function) ---
 def extract_text_from_file(file_path: Path) -> str:
     if file_path.suffix == ".pdf":
         with pdfplumber.open(file_path) as pdf:
@@ -118,7 +119,7 @@ You are "{self.bot_name}," a professional AI assistant. Your task is to answer q
         question_answer_chain = create_stuff_documents_chain(self.llm, prompt)
         return create_retrieval_chain(self.vector_store.as_retriever(), question_answer_chain)
 
-    def process_file(self, file_path: str):
+    async def load_and_index_document(self, file_path: str):
         text_content = extract_text_from_file(Path(file_path))
         documents = [Document(page_content=text_content)]
         
@@ -138,7 +139,7 @@ You are "{self.bot_name}," a professional AI assistant. Your task is to answer q
             return
         
         # --- THIS IS THE FIX ---
-        # Yield the entire chunk, not just the "answer" part.
+        # Yield the entire chunk dictionary, not just the "answer" string.
         async for chunk in self.retrieval_chain.astream({
             "input": user_message,
             "chat_history": chat_history
