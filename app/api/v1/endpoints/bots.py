@@ -47,7 +47,6 @@ async def upload_resume(bot_id: str, file: UploadFile = File(...), current_user:
     
     pipeline = RAGPipeline(bot_id=bot_id, user_id=str(current_user.id), bot_name=bot["name"])
     
-    # Using /tmp for temporary file storage, which is common in serverless/containerized environments
     file_location = f"/tmp/{file.filename}"
     with open(file_location, "wb+") as file_object:
         shutil.copyfileobj(file.file, file_object)
@@ -78,10 +77,13 @@ async def chat_with_bot(bot_id: str, request_data: dict, authenticated_user: dic
     chat_history = [HumanMessage(content=msg["content"]) if msg["type"] == "user" else AIMessage(content=msg["content"]) for msg in chat_history_raw]
     
     full_response = ""
+    # We simulate a non-streaming response from the stream for this endpoint.
     async for chunk in pipeline.get_response_stream(user_message, chat_history):
-        full_response += chunk
+        if "answer" in chunk:
+            full_response += chunk["answer"]
 
     return {"reply": strip_think_tags(full_response)}
+
 
 @router.post("/{bot_id}/chat/stream")
 async def chat_with_bot_stream(bot_id: str, request_data: dict, authenticated_user: dict = Depends(get_authenticated_user)):
@@ -103,13 +105,8 @@ async def chat_with_bot_stream(bot_id: str, request_data: dict, authenticated_us
     # Define a new async generator that wraps the original stream,
     # buffers the content, cleans it, and then yields the final result.
     async def clean_stream_generator():
-        """
-        Consumes the RAG pipeline stream, waits for the full response,
-        cleans it, and then yields the single cleaned response.
-        """
         full_response_chunks = []
         async for chunk in pipeline.get_response_stream(user_message, chat_history):
-            # The RAG pipeline yields dictionaries, we need the 'answer' part
             if "answer" in chunk:
                  full_response_chunks.append(chunk["answer"])
         
@@ -135,7 +132,6 @@ async def delete_bot(bot_id: str, current_user: User = Depends(get_current_user)
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Bot not found")
 
     await bots_collection.delete_one({"_id": ObjectId(bot_id)})
-    # Correctly construct the path for directory removal
     user_data_dir = os.path.join("data", str(current_user.id), bot_id)
     if os.path.exists(user_data_dir):
         shutil.rmtree(user_data_dir)
